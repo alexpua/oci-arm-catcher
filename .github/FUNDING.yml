@@ -1,0 +1,9 @@
+# Enables the "Sponsor" button on the repo.
+# Docs: https://docs.github.com/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/displaying-a-sponsor-button-in-your-repository
+
+# monobank jar — donations go straight to a Ukrainian card
+custom: ["https://send.monobank.ua/jar/4Hq7auheaa"]
+
+# GitHub Sponsors isn't available for Ukraine bank payouts yet.
+# Re-enable this line once Sponsors supports your region:
+# github: [alexpua]

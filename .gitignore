@@ -1,0 +1,45 @@
+# ── Secrets / local config ────────────────────────────────────────────────────
+# Never commit your real config. Only .env.example is tracked.
+.env
+*.env
+!.env.example
+
+# SSH keys / OCI key material
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+oci_api_key*
+~/.oci/
+
+# ── Logs / runtime output ─────────────────────────────────────────────────────
+*.log
+logs/
+nohup.out
+
+# ── Private launch notes (keep local, don't publish) ─────────────────────────
+docs/launch-and-marketing.md
+docs/publishing-steps.md
+docs/blog-en.md
+docs/blog-ru-habr.md
+
+# ── AI assistant / editor scratch files ──────────────────────────────────────
+CLAUDE.md
+.claude/
+.cursor/
+.cursorrules
+.aider*
+.windsurfrules
+
+# ── OS / editor junk ─────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
