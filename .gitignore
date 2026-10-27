@@ -43,3 +43,6 @@ Thumbs.db
 *.swo
 .idea/
 .vscode/
+
+# Error log written by the catcher
+oci-arm-catcher-errors.log

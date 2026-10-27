@@ -23,7 +23,10 @@ setup() {
 #   MOCK_MODE=capacity           -> print "out of host capacity" error, exit 1
 #   MOCK_MODE=fatal              -> print a non-retryable error, exit 1
 #   MOCK_MODE=fail_then_success  -> fail with capacity MOCK_FAILS times, then succeed
+#   MOCK_MODE=unknown_then_success -> fail with an unrecognised error, then succeed
+#   MOCK_ARGS_FILE               -> if set, append the received args there
 COUNT_FILE="${MOCK_COUNT_FILE:-/tmp/oci_mock_count}"
+[ -n "${MOCK_ARGS_FILE:-}" ] && echo "$*" >> "$MOCK_ARGS_FILE"
 case "${MOCK_MODE:-success}" in
   success)
     echo '{"data": {"id": "ocid1.instance.oc1..success", "display-name": "arm-free-1"}}'
@@ -39,6 +42,15 @@ case "${MOCK_MODE:-success}" in
     n=$((n + 1)); echo "$n" > "$COUNT_FILE"
     if [ "$n" -le "${MOCK_FAILS:-2}" ]; then
       echo '{"code": "InternalError", "message": "Out of host capacity."}' >&2
+      exit 1
+    fi
+    echo '{"data": {"id": "ocid1.instance.oc1..eventually"}}'
+    exit 0 ;;
+  unknown_then_success)
+    n=0; [ -f "$COUNT_FILE" ] && n=$(cat "$COUNT_FILE")
+    n=$((n + 1)); echo "$n" > "$COUNT_FILE"
+    if [ "$n" -le 1 ]; then
+      echo 'Traceback (most recent call last): something odd happened' >&2
       exit 1
     fi
     echo '{"data": {"id": "ocid1.instance.oc1..eventually"}}'
@@ -107,6 +119,27 @@ teardown() {
     [ "$status" -ne 0 ]
 }
 
+@test "is_retryable false for LimitExceeded and CLI usage errors" {
+    OCI_ARM_CATCHER_LIB=1 source "$SCRIPT"
+    run is_retryable '{"code": "LimitExceeded", "message": "standard-a1-core-count"}'
+    [ "$status" -ne 0 ]
+    run is_retryable "Parameter 'shape_config' must be in JSON format."
+    [ "$status" -ne 0 ]
+}
+
+@test "is_retryable true for unrecognised errors" {
+    OCI_ARM_CATCHER_LIB=1 source "$SCRIPT"
+    run is_retryable "Traceback (most recent call last): ConnectionResetError"
+    [ "$status" -eq 0 ]
+}
+
+@test "parse_oci_error fallback keeps the tab separator" {
+    OCI_ARM_CATCHER_LIB=1 source "$SCRIPT"
+    python3() { return 1; }
+    run parse_oci_error "garbage output"
+    [ "$output" = $'Error\tgarbage output' ]
+}
+
 # ── Integration tests: full script against the mock CLI ───────────────────────
 
 @test "succeeds immediately and exits 0" {
@@ -129,7 +162,28 @@ teardown() {
 @test "stops on a non-retryable error with exit 1" {
     PATH="$BIN:$PATH" MOCK_MODE=fatal run bash -c "$(printf '%q ' bash "$SCRIPT" "$ENV_FILE") 2>&1"
     [ "$status" -eq 1 ]
-    [[ "$output" == *"Unexpected"* ]]
+    [[ "$output" == *"Fatal"* ]]
+}
+
+@test "keeps retrying through an unrecognised error" {
+    export MOCK_COUNT_FILE="$TMP/count3"
+    PATH="$BIN:$PATH" MOCK_MODE=unknown_then_success ERROR_LOG="$TMP/err.log" run bash "$SCRIPT" "$ENV_FILE"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"SUCCESS"* ]]
+    grep -q "Traceback" "$TMP/err.log"
+}
+
+@test "passes BOOT_VOLUME_GB through to the launch call" {
+    echo "BOOT_VOLUME_GB=100" >> "$ENV_FILE"
+    PATH="$BIN:$PATH" MOCK_MODE=success MOCK_ARGS_FILE="$TMP/args" run bash "$SCRIPT" "$ENV_FILE"
+    [ "$status" -eq 0 ]
+    grep -q -- "--boot-volume-size-in-gbs 100" "$TMP/args"
+}
+
+@test "omits boot volume flag when BOOT_VOLUME_GB is unset" {
+    PATH="$BIN:$PATH" MOCK_MODE=success MOCK_ARGS_FILE="$TMP/args" run bash "$SCRIPT" "$ENV_FILE"
+    [ "$status" -eq 0 ]
+    ! grep -q -- "--boot-volume-size-in-gbs" "$TMP/args"
 }
 
 @test "fails fast when config file is missing" {

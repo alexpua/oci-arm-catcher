@@ -67,7 +67,7 @@ Describe 'oci-arm-catcher.ps1' {
         $env:MOCK_MODE = 'fatal'
         $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $Script -ConfigFile $EnvFile 2>&1 | Out-String
         $LASTEXITCODE | Should -Be 1
-        $out | Should -Match 'Unexpected error'
+        $out | Should -Match 'Fatal'
     }
 
     It 'fails fast when the config file is missing' {

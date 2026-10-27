@@ -44,11 +44,11 @@ set -euo pipefail
 # the old approach was the hunt silently dying for hours without you knowing.
 
 # Errors that will NEVER be fixed by retrying — stop immediately on these.
-NON_RETRYABLE_ERRORS='NotAuthenticated|AuthenticationFailed|NotAuthorized|AuthorizationFailed|InvalidParameter|InvalidCredentials|MissingParameter|IncorrectState|InvalidatedRetryToken|Http400|Http401|Http403|Http404|does not exist|not found in compartment|InvalidImageCompartment|InvalidSubnet|TenantIdMismatch'
+NON_RETRYABLE_ERRORS='LimitExceeded|NotAuthenticated|AuthenticationFailed|NotAuthorized|AuthorizationFailed|InvalidParameter|InvalidCredentials|MissingParameter|IncorrectState|InvalidatedRetryToken|Http400|Http401|Http403|Http404|does not exist|not found in compartment|InvalidImageCompartment|InvalidSubnet|TenantIdMismatch|Usage: oci|No such option|Missing option|must be in JSON format|ConfigFileNotFound|Could not find config file|ProfileNotFound'
 
 # Kept for quick, readable log labelling only — no longer used to decide
 # whether to stop. (Not load-bearing; is_retryable() below defaults to true.)
-KNOWN_TRANSIENT_ERRORS='out of capacity|out of host capacity|InternalError|LimitExceeded|TooManyRequests|timed out|RequestException|ServiceUnavailable|Service Unavailable|Http5|connection reset|EOF occurred'
+KNOWN_TRANSIENT_ERRORS='out of capacity|out of host capacity|InternalError|TooManyRequests|timed out|RequestException|ServiceUnavailable|Service Unavailable|Http5|connection reset|EOF occurred'
 
 # Optional safety valve: if set to a positive integer, stop after this many
 # CONSECUTIVE errors that don't match either list above (i.e. genuinely
@@ -103,7 +103,7 @@ if not msg:
 print((code or "Error") + "\t" + (msg or "no message"))
 ' 2>/dev/null) || parsed=""
     if [[ -z "$parsed" ]]; then
-        parsed="Error   $(printf '%s' "$output" | tr '\n' ' ' | cut -c1-200)"
+        parsed="Error"$'\t'"$(printf '%s' "$output" | tr '\n' ' ' | cut -c1-200)"
     fi
     printf '%s\n' "$parsed"
 }
@@ -228,6 +228,12 @@ fi
 RETRY_INTERVAL="${RETRY_INTERVAL:-300}"
 ERROR_LOG="${ERROR_LOG:-$SCRIPT_DIR/oci-arm-catcher-errors.log}"
 
+# Optional boot volume size. Unset = Oracle's image default (~47 GB).
+declare -a EXTRA_ARGS=()
+if [[ -n "${BOOT_VOLUME_GB:-}" ]]; then
+    EXTRA_ARGS+=(--boot-volume-size-in-gbs "$BOOT_VOLUME_GB")
+fi
+
 # ─── MAIN LOOP ────────────────────────────────────────────────────────────────
 
 echo "=== oci-arm-catcher started at $(date) ==="
@@ -238,6 +244,7 @@ else
     echo "Availability Domain: ${ADS[0]}"
 fi
 echo "Retry interval: $((RETRY_INTERVAL / 60)) min"
+[[ -n "${BOOT_VOLUME_GB:-}" ]] && echo "Boot volume: ${BOOT_VOLUME_GB} GB"
 echo "Errors are logged to: $ERROR_LOG"
 echo ""
 
@@ -270,6 +277,7 @@ while true; do
         --subnet-id           "$SUBNET_ID" \
         --ssh-authorized-keys-file "$SSH_KEY_FILE" \
         --assign-public-ip    true \
+        ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"} \
         --connection-timeout  60 \
         --read-timeout        120 \
         --no-retry \

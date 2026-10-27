@@ -25,15 +25,15 @@ function Invoke-OciJson {
     try { (& oci @OciArgs 2>$null | Out-String | ConvertFrom-Json) } catch { $null }
 }
 
-Write-Host "════════════════════════════════════════════════════════════════"
-Write-Host " oci-arm-catcher — config discovery"
-Write-Host "════════════════════════════════════════════════════════════════"
+Write-Host "================================================================"
+Write-Host " oci-arm-catcher - config discovery"
+Write-Host "================================================================"
 
 # 1) Compartments / tenancy
 $comps = Invoke-OciJson @('iam','compartment','list','--all')
 if ($comps -and $comps.data) {
     $tenancy = $comps.data[0].'compartment-id'
-    Write-Host "`n# Root compartment (tenancy) OCID — usable as COMPARTMENT_ID:"
+    Write-Host "`n# Root compartment (tenancy) OCID - usable as COMPARTMENT_ID:"
     Write-Host "COMPARTMENT_ID=`"$tenancy`""
     if (-not $Compartment) { $Compartment = $tenancy }
 
@@ -62,7 +62,7 @@ if ($Compartment) {
     }
 }
 
-Write-Host "`n# Your SSH public key (SSH_KEY_FILE) — typical locations:"
+Write-Host "`n# Your SSH public key (SSH_KEY_FILE) - typical locations:"
 foreach ($k in @("$HOME\.ssh\id_ed25519.pub","$HOME\.ssh\id_rsa.pub")) {
     if (Test-Path $k) { Write-Host "  $k" }
 }

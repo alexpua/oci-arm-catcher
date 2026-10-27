@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-    oci-arm-catcher — grabs free Oracle Cloud ARM capacity (VM.Standard.A1.Flex)
+    oci-arm-catcher - grabs free Oracle Cloud ARM capacity (VM.Standard.A1.Flex)
     and launches an instance the moment capacity appears. Windows port.
 
 .DESCRIPTION
@@ -19,13 +19,13 @@
     transient/capacity error the same way (different `code`, a raw traceback
     instead of clean JSON, an unfamiliar 5xx, a network blip, etc.), so the
     allow-list would eventually miss one and the script would silently quit
-    after hundreds/thousands of otherwise-identical attempts — which is
+    after hundreds/thousands of otherwise-identical attempts - which is
     exactly what was happening, at a different attempt number each time,
     whenever OCI worded a capacity/rate-limit error slightly differently than
     the last one.
 
     Fix: flip it to a *deny-list* of genuinely fatal, non-retryable errors
-    (bad config, bad auth, invalid resource ids — things that will NEVER be
+    (bad config, bad auth, invalid resource ids - things that will NEVER be
     fixed by waiting and retrying). Everything else is treated as retryable
     by default. Worst case with this approach is a wasted retry; worst case
     with the old approach was the hunt silently dying for hours without you
@@ -50,7 +50,7 @@ param(
     [string]$ConfigFile
 )
 
-# ─── LOCATE & LOAD CONFIG ─────────────────────────────────────────────────────
+# --- LOCATE & LOAD CONFIG -----------------------------------------------------
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 if (-not $ConfigFile) {
@@ -81,7 +81,7 @@ foreach ($line in Get-Content -LiteralPath $ConfigFile) {
     }
 }
 
-# ─── VALIDATE CONFIG ──────────────────────────────────────────────────────────
+# --- VALIDATE CONFIG ----------------------------------------------------------
 
 # Single AvailabilityDomain or comma-separated AvailabilityDomains (rotation).
 $ads = @()
@@ -119,21 +119,21 @@ $errorLog      = if ($cfg.ContainsKey('ERROR_LOG') -and $cfg['ERROR_LOG']) { $cf
 
 # Optional safety valve: if set to a positive integer, stop after this many
 # CONSECUTIVE errors that don't match either the fatal list or the known-
-# transient list (i.e. genuinely unrecognized output) — guards against
+# transient list (i.e. genuinely unrecognized output) - guards against
 # silently hammering a broken setup forever. 0/unset = never stop on this
 # basis (the default: keep trying).
 $maxConsecutiveUnknown = if ($env:MAX_CONSECUTIVE_UNKNOWN) { [int]$env:MAX_CONSECUTIVE_UNKNOWN } else { 0 }
 
-# ─── RETRY CLASSIFICATION ─────────────────────────────────────────────────────
+# --- RETRY CLASSIFICATION -----------------------------------------------------
 
-# Errors that will NEVER be fixed by retrying — stop immediately on these.
-$NonRetryablePattern = 'NotAuthenticated|AuthenticationFailed|NotAuthorized|AuthorizationFailed|InvalidParameter|InvalidCredentials|MissingParameter|IncorrectState|InvalidatedRetryToken|Http400|Http401|Http403|Http404|does not exist|not found in compartment|InvalidImageCompartment|InvalidSubnet|TenantIdMismatch'
+# Errors that will NEVER be fixed by retrying - stop immediately on these.
+$NonRetryablePattern = 'LimitExceeded|NotAuthenticated|AuthenticationFailed|NotAuthorized|AuthorizationFailed|InvalidParameter|InvalidCredentials|MissingParameter|IncorrectState|InvalidatedRetryToken|Http400|Http401|Http403|Http404|does not exist|not found in compartment|InvalidImageCompartment|InvalidSubnet|TenantIdMismatch|Usage: oci|No such option|Missing option|must be in JSON format|ConfigFileNotFound|Could not find config file|ProfileNotFound'
 
-# Kept for quick, readable log labelling only — no longer used to decide
+# Kept for quick, readable log labelling only - no longer used to decide
 # whether to stop. (Not load-bearing; retry decision below defaults to true.)
-$KnownTransientPattern = 'out of capacity|out of host capacity|InternalError|LimitExceeded|TooManyRequests|timed out|RequestException|ServiceUnavailable|Service Unavailable|Http5|connection reset|EOF occurred'
+$KnownTransientPattern = 'out of capacity|out of host capacity|InternalError|TooManyRequests|timed out|RequestException|ServiceUnavailable|Service Unavailable|Http5|connection reset|EOF occurred'
 
-# ─── HELPERS ──────────────────────────────────────────────────────────────────
+# --- HELPERS ------------------------------------------------------------------
 
 function Send-Notification {
     param([string]$Message)
@@ -159,7 +159,7 @@ function Send-Notification {
 
 # Parse OCI CLI JSON error output into an object with Code/Message.
 # Finds ALL brace-delimited blocks and uses the LAST one that parses with a
-# code/message — if the CLI ever echoes back request parameters (which can
+# code/message - if the CLI ever echoes back request parameters (which can
 # also look like a JSON blob) before the actual error, this avoids merging
 # them into one broken blob. Falls back gracefully so we never print "?: ?".
 function Get-OciError {
@@ -204,7 +204,7 @@ function Get-InstanceId {
 }
 
 # True unless the output matches a genuinely fatal (non-retryable) error.
-# Default is TRUE (retry) — see design note above.
+# Default is TRUE (retry) - see design note above.
 function Test-Retryable {
     param([string]$Output)
     -not ($Output -match $NonRetryablePattern)
@@ -218,7 +218,7 @@ function Test-KnownTransient {
     $Output -match $KnownTransientPattern
 }
 
-# ─── MAIN LOOP ────────────────────────────────────────────────────────────────
+# --- MAIN LOOP ----------------------------------------------------------------
 
 Write-Host "=== oci-arm-catcher started at $(Get-Date) ==="
 Write-Host "Shape: VM.Standard.A1.Flex  |  OCPU: $($cfg['OCPUS'])  |  RAM: $($cfg['MEMORY_GB'])GB"
@@ -228,9 +228,21 @@ if ($ads.Count -gt 1) {
     Write-Host "Availability Domain: $($ads[0])"
 }
 Write-Host "Retry interval: $([math]::Floor($retryInterval / 60)) min"
+if ($cfg['BOOT_VOLUME_GB']) { Write-Host "Boot volume: $($cfg['BOOT_VOLUME_GB']) GB" }
 Write-Host "Errors are logged to: $errorLog`n"
 
-$shapeConfig = "{`"ocpus`": $($cfg['OCPUS']), `"memoryInGBs`": $($cfg['MEMORY_GB'])}"
+# Windows PowerShell 5.1 strips the inner quotes when passing a JSON string to
+# a native exe, so OCI sees invalid JSON. Hand it a file:// path instead.
+$shapeConfigFile = Join-Path ([System.IO.Path]::GetTempPath()) 'oci-arm-catcher-shape.json'
+$shapeConfigJson = "{`"ocpus`": $($cfg['OCPUS']), `"memoryInGBs`": $($cfg['MEMORY_GB'])}"
+[System.IO.File]::WriteAllText($shapeConfigFile, $shapeConfigJson)
+$shapeConfig = "file://$shapeConfigFile"
+
+# Optional boot volume size. Unset = Oracle's image default (~47 GB).
+$extraArgs = @()
+if ($cfg.ContainsKey('BOOT_VOLUME_GB') -and $cfg['BOOT_VOLUME_GB']) {
+    $extraArgs += @('--boot-volume-size-in-gbs', $cfg['BOOT_VOLUME_GB'])
+}
 
 $attempt = 0
 $adIndex = 0
@@ -259,6 +271,7 @@ while ($true) {
         --subnet-id           $cfg['SUBNET_ID'] `
         --ssh-authorized-keys-file $cfg['SSH_KEY_FILE'] `
         --assign-public-ip    true `
+        @extraArgs `
         --connection-timeout  60 `
         --read-timeout        120 `
         --no-retry 2>&1 | Out-String
@@ -289,11 +302,11 @@ while ($true) {
             $consecutiveUnknown = 0
         } else {
             $consecutiveUnknown++
-            Write-Host "  -> (unrecognized error text, but not fatal — retrying. [$consecutiveUnknown consecutive])"
+            Write-Host "  -> (unrecognized error text, but not fatal - retrying. [$consecutiveUnknown consecutive])"
             if ($maxConsecutiveUnknown -gt 0 -and $consecutiveUnknown -ge $maxConsecutiveUnknown) {
                 Write-Host "  -> Hit MAX_CONSECUTIVE_UNKNOWN ($maxConsecutiveUnknown), stopping as a precaution." -ForegroundColor Red
                 Write-Host $output
-                Send-Notification "Too many unrecognized errors in a row — check $errorLog"
+                Send-Notification "Too many unrecognized errors in a row - check $errorLog"
                 exit 1
             }
         }
@@ -302,14 +315,14 @@ while ($true) {
         if ($ads.Count -gt 1) { $adIndex = ($adIndex + 1) % $ads.Count }
 
         for ($rem = $retryInterval; $rem -gt 0; $rem--) {
-            Write-Host -NoNewline ("`r  ⏳ {0:00}:{1:00} until next attempt" -f [math]::Floor($rem / 60), ($rem % 60))
+            Write-Host -NoNewline ("`r  {0:00}:{1:00} until next attempt" -f [math]::Floor($rem / 60), ($rem % 60))
             Start-Sleep -Seconds 1
         }
         Write-Host "`r$((' ' * 40))`r" -NoNewline
     } else {
         Write-Host "  -> Fatal (non-retryable) error, stopping." -ForegroundColor Red
         Write-Host $output
-        Send-Notification "Fatal OCI error — check the terminal / $errorLog"
+        Send-Notification "Fatal OCI error - check the terminal / $errorLog"
         exit 1
     }
 }
