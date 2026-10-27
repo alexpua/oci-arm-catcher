@@ -11,6 +11,8 @@ id_rsa*
 id_ed25519*
 oci_api_key*
 ~/.oci/
+# Throwaway keys generated for the signer's unit tests; not tied to any account.
+!crates/core/testdata/*.pem
 
 # ── Logs / runtime output ─────────────────────────────────────────────────────
 *.log
@@ -46,3 +48,6 @@ Thumbs.db
 
 # Error log written by the catcher
 oci-arm-catcher-errors.log
+
+# Rust build output
+target/

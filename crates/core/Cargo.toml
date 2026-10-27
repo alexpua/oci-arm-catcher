@@ -1,0 +1,25 @@
+[package]
+name = "oci-arm-catcher-core"
+description = "OCI API client and capacity-retry loop behind oci-arm-catcher — no OCI CLI, no Python"
+keywords = ["oci", "oracle-cloud", "ampere", "arm", "free-tier"]
+categories = ["api-bindings", "command-line-utilities"]
+readme = "../../README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+base64.workspace = true
+dirs.workspace = true
+httpdate.workspace = true
+ring.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+ureq.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

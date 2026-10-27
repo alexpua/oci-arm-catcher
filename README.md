@@ -1,9 +1,12 @@
 # oci-arm-catcher
 
-**Grab Oracle Cloud's free ARM capacity the moment it appears.** A tiny,
-dependency-light poller that retries `oci compute instance launch` for the
-Always Free `VM.Standard.A1.Flex` shape until Oracle finally has capacity —
-then launches your instance and pings you.
+**Grab Oracle Cloud's free ARM capacity the moment it appears.** A single,
+dependency-free binary that retries `LaunchInstance` for the Always Free
+`VM.Standard.A1.Flex` shape until Oracle finally has capacity — then launches
+your instance and pings you.
+
+Part of [DeepLab](https://deeplab.tools/products/) — small, sharp tools that run
+locally.
 
 ![oci-arm-catcher in action](assets/demo.gif)
 
@@ -19,8 +22,8 @@ ServiceError:
 …this is for you. Start it, walk away, get a notification when your instance is
 up.
 
-> Works on **macOS, Linux, and Windows**. Bash script for macOS/Linux, a native
-> PowerShell port for Windows.
+> Works on **macOS, Linux, and Windows**. One Rust binary that talks to the OCI
+> API directly; the original bash / PowerShell scripts are still included.
 
 ---
 
@@ -48,9 +51,9 @@ recognises the "no capacity, try again" family of errors, and grabs the slot the
 instant one opens — including rotating across multiple Availability Domains if
 your region has them.
 
-It's a single script with no runtime dependencies beyond the official OCI CLI and
-Python 3 (which ships with macOS and virtually every Linux). It's been used in
-production to catch a 4 OCPU / 24 GB A1 instance on a real account (under the
+It's a single binary with no runtime dependencies — it signs OCI API requests
+itself with the key in your `~/.oci/config`, so there's no OCI CLI or Python to
+install. It's been used in production to catch a 4 OCPU / 24 GB A1 instance on a real account (under the
 pre-June-2026 limits).
 
 ## Who it's for
@@ -65,91 +68,117 @@ and devops folks who want a free always-on ARM box.
 
 ```
 loop:
-  oci compute instance launch  --shape VM.Standard.A1.Flex ...
-  ├─ success            → parse instance OCID, desktop notification, exit 0
-  ├─ fatal error        → print it, notify, stop (so you can fix config)
-  │   auth failure / bad OCID / LimitExceeded / CLI usage error
-  └─ anything else      → wait RETRY_INTERVAL, rotate AD, retry
-      "Out of host capacity" / TooManyRequests / 5xx / timeout / network blip
+  LaunchInstance  shape=VM.Standard.A1.Flex ...
+  ├─ success              → print instance OCID + console link, notify, exit 0
+  ├─ 4xx (request is bad) → print it, notify, stop (so you can fix config)
+  │   auth failure / bad OCID / LimitExceeded
+  └─ everything else      → wait RETRY_INTERVAL, rotate AD, retry
+      "Out of host capacity" / 429 TooManyRequests / 5xx / timeout / network blip
 ```
 
 The error handling is the important part: it stops immediately on real problems
 (bad OCID, auth failure, quota exceeded) instead of looping forever against a
 wall, and keeps retrying on everything else, so an unfamiliar transient error
-can't silently end a multi-day hunt. Every failed attempt's raw output is
-appended to `oci-arm-catcher-errors.log` (override with `ERROR_LOG`).
+can't silently end a multi-day hunt.
+
+After a network error the binary resends the *same* request with the same
+`opc-retry-token`, so if the launch actually went through and only the answer
+was lost, OCI hands back that instance instead of creating a second one.
+
+The classic scripts follow the same rules by matching error text, and append
+every failed attempt's raw output to `oci-arm-catcher-errors.log` (override
+with `ERROR_LOG`).
 
 ---
+
+## Install
+
+One self-contained binary for macOS, Linux and Windows. It talks to the OCI API
+directly — **no OCI CLI and no Python needed**.
+
+```bash
+# macOS / Linux (Homebrew)
+brew install deeplabua/tap/oci-arm-catcher
+
+# macOS / Linux (installer script)
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/deeplabua/oci-arm-catcher/releases/latest/download/oci-arm-catcher-installer.sh | sh
+
+# Windows (PowerShell)
+powershell -c "irm https://github.com/deeplabua/oci-arm-catcher/releases/latest/download/oci-arm-catcher-installer.ps1 | iex"
+
+# From source
+cargo install oci-arm-catcher
+```
+
+Or grab an archive from [Releases](https://github.com/deeplabua/oci-arm-catcher/releases).
 
 ## Prerequisites
 
 1. **An Oracle Cloud account** (Always Free is fine) and a region picked.
 2. **A VCN with a public subnet** in that region. The OCI console's "Create
    VCN with Internet Connectivity" wizard sets this up in one click.
-3. **The OCI CLI**, installed and configured:
+3. **An API key in `~/.oci/config`.** In the console: profile menu → *My
+   profile* → *API keys* → *Add API key* → *Generate API key pair*. Download
+   the private key, then paste the "Configuration file preview" it shows into
+   `~/.oci/config` and point `key_file` at the downloaded key. (If you already
+   ran `oci setup config`, you're done.)
 
-   ```bash
-   # macOS
-   brew install oci-cli
-   # Linux / Windows / anything with pip
-   pip install oci-cli
+Check it works — this is read-only:
 
-   # one-time auth setup — creates ~/.oci/config
-   oci setup config
-   ```
-
-   Verify it works:
-
-   ```bash
-   oci iam region list
-   ```
-
-4. **Python 3** — used to parse JSON responses. Already present on macOS and
-   most Linux distros (`python3 --version`).
+```bash
+oci-arm-catcher check
+```
 
 ---
 
 ## Quick start
 
 ```bash
-git clone https://github.com/alexpua/oci-arm-catcher.git
-cd oci-arm-catcher
+oci-arm-catcher discover > .env   # read-only: prints your OCIDs as .env lines
+# review .env (pick a subnet if you have several), then:
+oci-arm-catcher
+```
 
-cp .env.example .env       # then edit .env (see below)
-chmod +x oci-arm-catcher.sh
+That's it. It retries until capacity appears, launches the instance, prints its
+console link and sends a desktop notification. `oci-arm-catcher --help` lists
+every flag; each one can also be set in `.env` or as an environment variable.
+
+<details>
+<summary><b>Classic shell scripts</b> (bash / PowerShell + OCI CLI)</summary>
+
+The original scripts still work and read the same `.env`. They need the
+[OCI CLI](https://docs.oracle.com/iaas/Content/API/SDKDocs/cliinstall.htm)
+(`oci setup config`) and, for bash, Python 3.
+
+```bash
+git clone https://github.com/deeplabua/oci-arm-catcher.git
+cd oci-arm-catcher
+cp .env.example .env       # then edit .env
+./scripts/get-config.sh    # read-only OCID discovery
 ./oci-arm-catcher.sh
 ```
 
-On Windows (PowerShell):
+On Windows: `Copy-Item .env.example .env`, then `.\scripts\get-config.ps1`
+and `.\oci-arm-catcher.ps1`.
 
-```powershell
-git clone https://github.com/alexpua/oci-arm-catcher.git
-cd oci-arm-catcher
-
-Copy-Item .env.example .env   # then edit .env
-.\oci-arm-catcher.ps1
-```
+</details>
 
 ---
 
 ## Configuration
 
-All settings live in `.env` (copied from `.env.example`). The fiddly part is
-finding your OCIDs — there's a helper for that.
+All settings live in `.env` (see [`.env.example`](.env.example)), or can be
+passed as flags. Precedence: flag > environment variable > `.env`.
 
 ### Auto-discover your OCIDs
 
-After `oci setup config` works, run the discovery helper. It's **read-only** —
-it launches nothing, just prints the values you need:
-
 ```bash
-./scripts/get-config.sh
-# or on Windows:
-.\scripts\get-config.ps1
+oci-arm-catcher discover
 ```
 
-It prints your compartment OCIDs, availability domains, subnets, and the latest
-ARM image ID, formatted so you can paste them straight into `.env`.
+It's **read-only** — it launches nothing, just prints your compartment,
+availability domain(s), public subnets and the latest ARM image, formatted as
+`.env` lines. Use `--os "Oracle Linux"` for a different image.
 
 ### Finding values manually
 
@@ -227,9 +256,10 @@ log file (non-interactive), and a live countdown when run in a terminal.
 
 ## Running on Windows
 
-Two options:
+Use the binary (see [Install](#install)) — it runs natively on Windows and
+shows a toast notification on success. The classic scripts work too:
 
-1. **Native PowerShell** (recommended) — use `oci-arm-catcher.ps1` as shown
+1. **Native PowerShell** — use `oci-arm-catcher.ps1` as shown
    above. It shows Windows toast notifications (via
    [BurntToast](https://github.com/Windos/BurntToast) if installed, otherwise a
    tray balloon).
@@ -268,7 +298,7 @@ internal retry/backoff, independent of `--connection-timeout` / `--read-timeout`
 after a `500` it can silently loop on `429 Too Many Requests` for minutes inside a
 single attempt, so `RETRY_INTERVAL` no longer reflects the real interval. The
 catcher now passes `--no-retry` and does its own retrying, which fixes this
-(thanks [@zearp](https://github.com/zearp), [#1](https://github.com/alexpua/oci-arm-catcher/issues/1)).
+(thanks [@zearp](https://github.com/zearp), [#1](https://github.com/deeplabua/oci-arm-catcher/issues/1)).
 If you're on an older copy, `git pull`.
 
 **The image won't boot / wrong architecture**
@@ -283,6 +313,17 @@ console regardless.
 ---
 
 ## Development & tests
+
+The Rust workspace has two crates: `crates/core` (`oci-arm-catcher-core` — config,
+request signing, API client and the retry loop) and `crates/cli` (the
+`oci-arm-catcher` binary).
+
+```bash
+cargo test
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all
+cargo run -- check          # read-only call against your own account
+```
 
 The bash script is covered by [bats](https://github.com/bats-core/bats-core)
 tests that mock the `oci` CLI, and the PowerShell port by
@@ -337,7 +378,7 @@ backoff, and region/AD presets.
 
 If `oci-arm-catcher` caught you a free server, two things help a lot:
 
-- ⭐ **[Star the repo](https://github.com/alexpua/oci-arm-catcher)** — it's how other people fighting "Out of host capacity" find it.
+- ⭐ **[Star the repo](https://github.com/deeplabua/oci-arm-catcher)** — it's how other people fighting "Out of host capacity" find it.
 - ☕ **[Buy me a coffee](https://send.monobank.ua/jar/4Hq7auheaa)** — if it saved you some time and you feel like it.
 
 Both are completely optional. The tool is free and always will be.

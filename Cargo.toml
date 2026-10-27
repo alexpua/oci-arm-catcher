@@ -1,0 +1,62 @@
+[workspace]
+members = ["crates/cli", "crates/core"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+license = "MIT"
+repository = "https://github.com/deeplabua/oci-arm-catcher"
+homepage = "https://deeplab.tools"
+
+# Every dependency here must be permissive (MIT/Apache-2.0/BSD/ISC/MPL/Zlib).
+[workspace.dependencies]
+oci-arm-catcher-core = { version = "0.1.0", path = "crates/core" }
+anyhow = "1.0"                                                   # MIT OR Apache-2.0
+base64 = "0.22"                                                  # MIT OR Apache-2.0
+clap = { version = "4.6", features = ["derive", "env", "wrap_help"] }  # MIT OR Apache-2.0
+dirs = "6.0"                                                     # MIT OR Apache-2.0
+httpdate = "1.0"                                                 # MIT OR Apache-2.0
+notify-rust = "4.11"                                             # MIT OR Apache-2.0
+# RSA-SHA256 request signing. Already in the graph through rustls, and unlike the `rsa`
+# crate it has no open timing advisory.
+ring = "0.17"                                                    # Apache-2.0 AND ISC
+serde = { version = "1.0", features = ["derive"] }               # MIT OR Apache-2.0
+serde_json = "1.0"                                               # MIT OR Apache-2.0
+tempfile = "3.24"                                                # MIT OR Apache-2.0
+thiserror = "2.0"                                                # MIT OR Apache-2.0
+# rustls + ring, no C toolchain and no OpenSSL.
+ureq = { version = "3.3", default-features = false, features = [
+    "rustls",
+    "json",
+] }                                                              # MIT OR Apache-2.0
+
+[profile.release]
+lto = "thin"
+strip = true
+
+# The profile dist builds release artifacts with.
+[profile.dist]
+inherits = "release"
+lto = "thin"
+
+[workspace.metadata.dist]
+# The preferred dist version to use in CI (Cargo.toml SemVer syntax)
+cargo-dist-version = "0.32.0"
+# CI backends to support
+ci = "github"
+# The installers to generate for each app
+installers = ["shell", "powershell", "homebrew"]
+# A GitHub repo to push Homebrew formulas to
+tap = "deeplabua/homebrew-tap"
+# Publish jobs to run in CI
+publish-jobs = ["homebrew"]
+# Target platforms to build apps for (Rust target-triple syntax)
+targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+# Whether to install an updater program
+install-updater = false
+# Path that installers should place binaries in
+install-path = "CARGO_HOME"
+# No `[workspace.metadata.dist.dependencies]`: the binary talks to the OCI API itself, so
+# neither the OCI CLI nor Python is needed at runtime.

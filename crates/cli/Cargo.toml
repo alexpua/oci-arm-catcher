@@ -1,0 +1,25 @@
+[package]
+name = "oci-arm-catcher"
+description = "Grab Oracle Cloud's free ARM (A1.Flex) capacity the moment it appears — one binary, no OCI CLI"
+keywords = ["oci", "oracle-cloud", "ampere", "arm", "free-tier"]
+categories = ["command-line-utilities"]
+readme = "../../README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[[bin]]
+name = "oci-arm-catcher"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+notify-rust.workspace = true
+oci-arm-catcher-core.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
