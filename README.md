@@ -67,14 +67,17 @@ and devops folks who want a free always-on ARM box.
 loop:
   oci compute instance launch  --shape VM.Standard.A1.Flex ...
   ├─ success            → parse instance OCID, desktop notification, exit 0
-  ├─ "out of capacity"  → wait RETRY_INTERVAL, rotate AD, retry
-  │   InternalError / LimitExceeded / TooManyRequests / timeout
-  └─ any other error    → print it, notify, stop (so you can fix config)
+  ├─ fatal error        → print it, notify, stop (so you can fix config)
+  │   auth failure / bad OCID / LimitExceeded / CLI usage error
+  └─ anything else      → wait RETRY_INTERVAL, rotate AD, retry
+      "Out of host capacity" / TooManyRequests / 5xx / timeout / network blip
 ```
 
-The error handling is the important part: it only retries on the errors that
-mean *"come back later"*, and stops immediately on real problems (bad OCID,
-auth failure, quota exceeded) instead of looping forever against a wall.
+The error handling is the important part: it stops immediately on real problems
+(bad OCID, auth failure, quota exceeded) instead of looping forever against a
+wall, and keeps retrying on everything else, so an unfamiliar transient error
+can't silently end a multi-day hunt. Every failed attempt's raw output is
+appended to `oci-arm-catcher-errors.log` (override with `ERROR_LOG`).
 
 ---
 
@@ -172,6 +175,8 @@ ARM image ID, formatted so you can paste them straight into `.env`.
 | `OCPUS` | yes | `2` | Always Free max is 2 total (was 4 before 15 Jun 2026) |
 | `MEMORY_GB` | yes | `12` | Always Free max is 12 total (was 24 before 15 Jun 2026) |
 | `RETRY_INTERVAL` | no | `300` | Seconds between attempts |
+| `BOOT_VOLUME_GB` | no | image default (~47) | Boot volume size; Always Free includes 200 GB block storage in total |
+| `ERROR_LOG` | no | `oci-arm-catcher-errors.log` | Where raw error output from each failed attempt is appended |
 
 \* Set **either** `AVAILABILITY_DOMAIN` (one AD) **or** `AVAILABILITY_DOMAINS`
 (rotation). If both are set, the rotating list wins.

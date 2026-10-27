@@ -3,11 +3,10 @@
 # oci-arm-catcher — grabs free Oracle Cloud ARM capacity (VM.Standard.A1.Flex)
 # and launches an instance the moment capacity appears.
 #
-# It calls `oci compute instance launch` in a loop. On capacity-related errors
-# ("Out of host capacity", InternalError, LimitExceeded, TooManyRequests,
-# timeouts) it waits RETRY_INTERVAL and retries, optionally rotating across
-# several Availability Domains. On success it parses the instance OCID and
-# fires a desktop notification.
+# It calls `oci compute instance launch` in a loop. On capacity-related /
+# transient errors it waits RETRY_INTERVAL and retries, optionally rotating
+# across several Availability Domains. On success it parses the instance OCID
+# and fires a desktop notification.
 #
 # Prerequisites:
 #   - OCI CLI installed:  https://docs.oracle.com/iaas/Content/API/SDKDocs/cliinstall.htm
@@ -22,8 +21,40 @@
 
 set -euo pipefail
 
-# Errors that mean "no capacity right now, keep trying".
-RETRYABLE_ERRORS='out of capacity|out of host capacity|InternalError|LimitExceeded|TooManyRequests|timed out|RequestException|ServiceUnavailable|Service Unavailable'
+# ─── RETRY CLASSIFICATION ─────────────────────────────────────────────────────
+#
+# IMPORTANT DESIGN NOTE (fixes a real bug that hit this script in production):
+#
+# The previous version used an *allow-list* of "known retryable" error
+# substrings, and treated anything that didn't match as fatal ("Unexpected
+# error, stopping."). That's backwards for a tool whose whole job is to sit
+# and wait for transient capacity errors: OCI/the CLI doesn't always phrase a
+# transient/capacity error the same way (different `code`, a raw Python
+# traceback instead of clean JSON, an unfamiliar 5xx, a network blip, etc.),
+# so the allow-list would eventually miss one and the script would silently
+# quit after hundreds/thousands of otherwise-identical attempts — which is
+# exactly what was happening, at a different attempt number each time,
+# whenever OCI worded a capacity/rate-limit error slightly differently than
+# the last one.
+#
+# Fix: flip it to a *deny-list* of genuinely fatal, non-retryable errors
+# (bad config, bad auth, invalid resource ids — things that will NEVER be
+# fixed by waiting and retrying). Everything else is treated as retryable by
+# default. Worst case with this approach is a wasted retry; worst case with
+# the old approach was the hunt silently dying for hours without you knowing.
+
+# Errors that will NEVER be fixed by retrying — stop immediately on these.
+NON_RETRYABLE_ERRORS='LimitExceeded|NotAuthenticated|AuthenticationFailed|NotAuthorized|AuthorizationFailed|InvalidParameter|InvalidCredentials|MissingParameter|IncorrectState|InvalidatedRetryToken|Http400|Http401|Http403|Http404|does not exist|not found in compartment|InvalidImageCompartment|InvalidSubnet|TenantIdMismatch|Usage: oci|No such option|Missing option|must be in JSON format|ConfigFileNotFound|Could not find config file|ProfileNotFound'
+
+# Kept for quick, readable log labelling only — no longer used to decide
+# whether to stop. (Not load-bearing; is_retryable() below defaults to true.)
+KNOWN_TRANSIENT_ERRORS='out of capacity|out of host capacity|InternalError|TooManyRequests|timed out|RequestException|ServiceUnavailable|Service Unavailable|Http5|connection reset|EOF occurred'
+
+# Optional safety valve: if set to a positive integer, stop after this many
+# CONSECUTIVE errors that don't match either list above (i.e. genuinely
+# unrecognized output) — guards against silently hammering a broken setup
+# forever. Unset/0 = never stop on this basis (the default: keep trying).
+MAX_CONSECUTIVE_UNKNOWN="${MAX_CONSECUTIVE_UNKNOWN:-0}"
 
 # ─── HELPERS ──────────────────────────────────────────────────────────────────
 
@@ -46,14 +77,21 @@ parse_oci_error() {
 import sys, json, re
 raw = sys.stdin.read()
 code = msg = ""
-m = re.search(r"\{.*\}", raw, re.S)
-if m:
-    try:
-        d = json.loads(m.group(0))
-        code = d.get("code") or d.get("status") or ""
-        msg  = d.get("message") or ""
-    except Exception:
-        pass
+# The real ServiceError JSON block from OCI is flat (no nested braces).
+# Find ALL brace-delimited blocks and use the LAST one — if the CLI ever
+# echoes back request parameters (which can also look like a JSON blob)
+# before the actual error, this avoids merging them into one broken blob.
+matches = re.findall(r"\{[^{}]*\}", raw, re.S)
+if matches:
+    for candidate in reversed(matches):
+        try:
+            d = json.loads(candidate)
+            code = d.get("code") or d.get("status") or ""
+            msg  = d.get("message") or ""
+            if code or msg:
+                break
+        except Exception:
+            continue
 if not msg:
     picked = ""
     for line in raw.splitlines():
@@ -65,7 +103,7 @@ if not msg:
 print((code or "Error") + "\t" + (msg or "no message"))
 ' 2>/dev/null) || parsed=""
     if [[ -z "$parsed" ]]; then
-        parsed="Error	$(printf '%s' "$output" | tr '\n' ' ' | cut -c1-200)"
+        parsed="Error"$'\t'"$(printf '%s' "$output" | tr '\n' ' ' | cut -c1-200)"
     fi
     printf '%s\n' "$parsed"
 }
@@ -75,9 +113,20 @@ parse_instance_id() {
     printf '%s' "$1" | python3 -c 'import sys,json; print(json.load(sys.stdin)["data"]["id"])' 2>/dev/null || echo "unknown"
 }
 
-# True if the given output is a retryable (capacity) error.
+# True unless the output matches a genuinely fatal (non-retryable) error.
+# Default is TRUE (retry) — see design note above.
 is_retryable() {
-    printf '%s' "$1" | grep -qiE "$RETRYABLE_ERRORS"
+    if printf '%s' "$1" | grep -qiE "$NON_RETRYABLE_ERRORS"; then
+        return 1
+    fi
+    return 0
+}
+
+# True if the output matches one of the well-known transient/capacity
+# patterns. Used only for nicer logging (e.g. flagging truly unrecognized
+# errors), not for the retry decision itself.
+is_known_transient() {
+    printf '%s' "$1" | grep -qiE "$KNOWN_TRANSIENT_ERRORS"
 }
 
 # Spinner — interactive terminals only.
@@ -177,6 +226,13 @@ fi
 [[ $missing -eq 0 ]] || exit 1
 
 RETRY_INTERVAL="${RETRY_INTERVAL:-300}"
+ERROR_LOG="${ERROR_LOG:-$SCRIPT_DIR/oci-arm-catcher-errors.log}"
+
+# Optional boot volume size. Unset = Oracle's image default (~47 GB).
+declare -a EXTRA_ARGS=()
+if [[ -n "${BOOT_VOLUME_GB:-}" ]]; then
+    EXTRA_ARGS+=(--boot-volume-size-in-gbs "$BOOT_VOLUME_GB")
+fi
 
 # ─── MAIN LOOP ────────────────────────────────────────────────────────────────
 
@@ -188,10 +244,13 @@ else
     echo "Availability Domain: ${ADS[0]}"
 fi
 echo "Retry interval: $((RETRY_INTERVAL / 60)) min"
+[[ -n "${BOOT_VOLUME_GB:-}" ]] && echo "Boot volume: ${BOOT_VOLUME_GB} GB"
+echo "Errors are logged to: $ERROR_LOG"
 echo ""
 
 attempt=0
 ad_index=0
+consecutive_unknown=0
 
 while true; do
     attempt=$((attempt + 1))
@@ -218,6 +277,7 @@ while true; do
         --subnet-id           "$SUBNET_ID" \
         --ssh-authorized-keys-file "$SSH_KEY_FILE" \
         --assign-public-ip    true \
+        ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"} \
         --connection-timeout  60 \
         --read-timeout        120 \
         --no-retry \
@@ -240,16 +300,37 @@ while true; do
     IFS=$'\t' read -r error_code error_msg < <(parse_oci_error "$output") || true
     echo "  -> ${error_code}: ${error_msg}"
 
+    # Always log the full raw error, regardless of classification, so it's
+    # possible to review afterwards what actually happened (background/
+    # unattended runs lose terminal scrollback).
+    {
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Attempt #$attempt (AD: $current_ad)"
+        printf '%s\n' "$output"
+        echo "---"
+    } >> "$ERROR_LOG"
+
     if is_retryable "$output"; then
+        if is_known_transient "$output"; then
+            consecutive_unknown=0
+        else
+            consecutive_unknown=$((consecutive_unknown + 1))
+            echo "  -> (unrecognized error text, but not fatal — retrying. [$consecutive_unknown consecutive])"
+            if [[ "$MAX_CONSECUTIVE_UNKNOWN" -gt 0 && "$consecutive_unknown" -ge "$MAX_CONSECUTIVE_UNKNOWN" ]]; then
+                echo "  -> Hit MAX_CONSECUTIVE_UNKNOWN ($MAX_CONSECUTIVE_UNKNOWN), stopping as a precaution." >&2
+                printf '%s\n' "$output" >&2
+                notify "Too many unrecognized errors in a row — check $ERROR_LOG"
+                exit 1
+            fi
+        fi
         # Rotate to the next AD for the following attempt.
         if [ ${#ADS[@]} -gt 1 ]; then
             ad_index=$(((ad_index + 1) % ${#ADS[@]}))
         fi
         wait_countdown "$RETRY_INTERVAL"
     else
-        echo "  -> Unexpected error, stopping." >&2
+        echo "  -> Fatal (non-retryable) error, stopping." >&2
         printf '%s\n' "$output" >&2
-        notify "Unexpected OCI error — check the terminal."
+        notify "Fatal OCI error — check the terminal / $ERROR_LOG"
         exit 1
     fi
 done
